@@ -1,0 +1,206 @@
+---
+title: "Project"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Background
+
+This is a dataset built by scraping the United States Department of Labor's Bureau of Labor Statistics. This data represents the Local Area Unemployment Statistics from 1990-2016, broken down by state and month. The data itself is pulled from this mapping site: https://data.bls.gov/map/MapToolServlet?survey=la&map=county&seasonal=u
+The unemployment rate has varied from as low as 1% during World War I to as high as 25% during the Great Depression (in most countries it started in 1929 and lasted until 1941. It was the longest, deepest, and most widespread depression of the 20th century). More recently, it reached peaks of 10.8% in November 1982 and 10.0% in October 2009. Unemployment tends to rise during recessions and fall during expansions. From 1948 to 2015, unemployment averaged about 5.8%. The United States has experienced 11 recessions since the end of the postwar period in 1948.
+
+
+## Purpose
+
+The unemployment rate has been the primary summary statistic for the health of the labor market for quite some time. Recently, however, forecasts of the unemployment rate have come to the forefront, as monetary policy makers are trying to formulate a way of conditioning expectations in the new and extraordinary policy environment.
+The purpose of this report is to focus on the trends in unemployment rate and to quantify the rate in 2019. We present an in-depth study of the forecasts for the monthly U.S. unemployment rate using various time series models and comparing between these forecasting methods to further our understanding of the strengths and deficiencies of these methods. 
+
+## About the Data
+
+The data used for the purposes of this report represents the Local Area Unemployment Statistics from January 1990 - December 2016, broken down by state and month. The formatted version of the data in CSV format for the purposes of this analysis was obtained from Kaggle. The raw unformatted data is available at the United States Bureau of Labor Statistics Website.
+Note: These unemployment rates are general monthly U-3 rates and are not seasonally adjusted or categorized by age, gender, level of education, etc.
+
+```{r  , echo=FALSE, message=FALSE, warning=FALSE}
+library(dplyr)
+library(forecast)
+library(urca)
+library(fpp2)
+
+unemp_data = read.csv('~/Desktop/SantaClara/TimeSeries/Project/output.csv', header = TRUE, stringsAsFactors = FALSE)
+```
+
+## Including Plots
+```{r  , echo=FALSE, message=FALSE, warning=FALSE}
+head(unemp_data)
+```
+
+```{r  , echo=FALSE, message=FALSE, warning=FALSE}
+state_wise_avg <- unemp_data %>%
+  select(State,Rate) %>%
+  group_by(State) %>%
+  summarise('Average'= mean(Rate)) %>%
+  mutate(State = tolower(State))
+
+colnames(state_wise_avg)[1]<-"region"
+colnames(state_wise_avg)[2]<-"value"
+
+require(choroplethr)
+require(choroplethrMaps)
+state_choropleth(state_wise_avg, title="Average Unemployment across USA", num_colors=8, legend="Avg unemp rate")
+
+```
+
+States like California, Arizona and Michigan have fairly high average rates of unemployment.
+
+## Analysis 
+
+```{r  , echo=FALSE, message=FALSE, warning=FALSE}
+byYear <- unemp_data %>%
+  select(-State, -County) %>% 
+  group_by(Year, Month) %>% 
+  summarise(Rate = mean(Rate)) %>%
+  arrange(Year, match(Month, month.name))
+
+df <- ts(byYear[,3], start = c(1990,1), freq = 12)
+plot(stl(df[, 1], s.window = "periodic"))
+```
+
+
+There seems to be some seasonality/cyclicity. Also the data is not stationary. SO we take a log and do a first order difference. 
+```{r}
+plot(stl(df_bc[, 1], s.window = "periodic"))
+```
+
+```{r}
+#autoplot(BoxCox(df,lambda=0.38))
+```
+
+
+```{r  , echo=FALSE, message=FALSE, warning=FALSE}
+p1 = autoplot(df)+
+  ggtitle("US Monthly Unemployment Rate") + xlab("Year") + ylab("Unemployment Rate")
+df_bc = BoxCox(df,lambda=BoxCox.lambda(df))
+p2 = autoplot(df_bc)+
+  xlab("Year") + ylab("BoxCox of Unemployment Rate")
+gridExtra::grid.arrange(p1,p2, nrow=2)
+
+train <- window(df_bc, end = c(2010,12))
+test <- window(df_bc, start = c(2011,1), end = c(2016,12))
+
+```
+
+## ETS Models
+
+```{r  , echo=FALSE, message=FALSE, warning=FALSE}
+ets_fit0 <- ets(train)
+checkresiduals(ets_fit0)
+
+#a2 <- accuracy(ets_fit0)
+#a2[,c("RMSE","MAE","MAPE","MASE")]
+
+```
+
+## ARIMA Models
+
+We notice a definite rise and fall of unemployment rates correlating with recessions and expansions.
+This dataset spans over 3 recessions. The country went through a recession in 1990. The collapse of the Internet bubble and the Sept. 11 attacks pushed the country into another recession in 2001, shortly after George W. Bush took office. The financial crisis of 2007 to 2009 gave rise to a third recession. We can see the corresponding rise in unemployment rates for these time periods in the above graph, the steepest being that showing the recent financial crisis.
+These asymmetries in the unemployment rate are important in our analysis for two reasons. First, univariate linear models are not able to accurately represent these asymmetric cycles. Thus we would expect that the greatest contribution of recently developed nonlinear models will be to help forecast during these contrasting cyclical phases.
+
+From the graph above, we notice the following properties of this time series.
+
+* This time series has a significant trend.
+* It has a seasonal component.
+* It has a cyclic pattern shown by the rise and fall of unemployment rates corresponding to recessions & expansions
+* The cycle lengths (in years) vary over time
+* The graph of the log transformed series appears to have a slightly more even magnitude for the seasonal component than the untransformed one. So we will be using the log transformed series for further analysis
+
+
+Since there appears to be seasonality in the data. Let's look at nsdiffs to see how many diffs can make the data stationary.
+```{r  , echo=FALSE, message=FALSE, warning=FALSE}
+df_bc %>%  nsdiffs()
+df_bc %>% diff(lag=12) %>% nsdiffs()
+df_bc %>% diff(lag=12) %>% ndiffs()
+df_bc %>% diff(lag=12) %>% ur.kpss() %>% summary() #since t-stat is < 5pct, we'll call this series stationary
+df_bc %>% diff(lag=12) %>% ggtsdisplay() 
+```
+
+Next let's explore some ways of detecting patterns.
+Autocorrelation, also known as serial correlation, is the correlation of a time series with a delayed copy of itself. Informally, it is the similarity between observations as a function of the time lag between them. The analysis of autocorrelation is a mathematical tool for finding repeating patterns, such as the presence of periodicity or seasonality.
+We can also define a second order partial autocorrelation. The partial autocorrelation function (PACF) gives the partial correlation of a time series with its own lagged values, controlling for the values of the time series at all shorter lags. It contrasts with the autocorrelation function, which does not control for other lags. This function plays an important role in data analyses aimed at identifying the extent of the lag in an autoregressive (AR) model,
+
+
+
+
+
+
+```{r  , echo=FALSE, message=FALSE, warning=FALSE}
+#--Data Modeling. This takes a few minutes to run
+#auto.arima(df_bc, stepwise=FALSE, max.order = 9,
+#                      approximation=FALSE)
+```
+
+```{r  , echo=FALSE, message=FALSE, warning=FALSE}
+fit1 <- Arima(train, order=c(4,0,3), seasonal = c(1,1,1))
+fit1 %>% forecast %>% autoplot
+checkresiduals(fit1)
+```
+
+```{r  , echo=FALSE, message=FALSE, warning=FALSE}
+fit2 <- Arima(train,order=c(4,0,3), seasonal = c(2,1,1))
+fit2 %>% forecast %>% autoplot
+checkresiduals(fit2)
+```
+
+```{r  , echo=FALSE, message=FALSE, warning=FALSE}
+fit3 <- Arima(log(df),order=c(4,0,2), seasonal = c(1,1,1))
+fit3 %>% forecast %>% autoplot
+checkresiduals(fit3)
+
+```
+
+## Check which Arima Model fits better
+
+Based on the AICc values, we see that Model 1 fits the best with lowest AICc of -1252.247.
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+fit1$aicc
+fit2$aicc
+fit3$aicc
+
+```
+
+## Comparing ETS vs ARIMA
+```{r}
+
+a1 = ets_fit0 %>% forecast(h=72) %>% accuracy(test)
+a2 = fit1 %>% forecast(h=72) %>% accuracy(test)
+
+a1[,c("RMSE","MAE","MAPE","MASE")]
+a2[,c("RMSE","MAE","MAPE","MASE")]
+```
+
+
+
+## Forecasting next 2 years
+
+```{r echo=FALSE, warning=FALSE}
+fit = Arima(df_bc, order=c(4,0,3), seasonal = c(1,1,1))
+fc <- forecast(fit, h=48)
+summary(fc)
+plot(fc)
+```
+```{r}
+(2.485121**0.38 - 1) / 0.38
+```
+```{r}
+InvBoxCox(fc$mean, lambda = BoxCox.lambda(df))
+```
+```{r}
+InvBoxCox(2.563517,0.388)
+```
+
